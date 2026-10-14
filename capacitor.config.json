@@ -1,0 +1,10 @@
+{
+  "appId": "com.shahin.dsedesk",
+  "appName": "DSE Desk",
+  "webDir": "www",
+  "android": { "backgroundColor": "#0b1220" },
+  "plugins": {
+    "CapacitorHttp": { "enabled": true },
+    "LocalNotifications": { "iconColor": "#3B82F6" }
+  }
+}

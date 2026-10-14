@@ -1,0 +1,75 @@
+name: Build DSE Desk APK
+
+on:
+  push:
+    branches: [main, dse-desk]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # GitHub's Ubuntu runners ship with the Android SDK; just make sure SDK 36 is there.
+      - name: Prepare Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" --install "platforms;android-36" "build-tools;36.0.0" "platform-tools" > /dev/null
+          echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+
+      - name: Install & bundle web app
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build:web
+          npx cap sync android
+
+      - name: Build APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+          cp app/build/outputs/apk/release/app-release.apk ../DSE-Desk.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DSE-Desk-apk
+          path: DSE-Desk.apk
+
+      # Saves the APK on its own branch (<branch>-apk) so it can be downloaded with plain git.
+      - name: Save APK to branch
+        run: |
+          BR="${GITHUB_REF_NAME}-apk"
+          mkdir out && cp DSE-Desk.apk out/ && cd out
+          echo "Built from ${GITHUB_SHA} on $(date -u +%Y-%m-%dT%H:%MZ)" > BUILD.txt
+          git init -q
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git checkout -q -b "$BR"
+          git add DSE-Desk.apk BUILD.txt
+          git commit -q -m "DSE Desk APK from ${GITHUB_SHA}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" "$BR"
+
+      - name: Publish to "latest" release (only in a dedicated repo, on main)
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: DSE Desk (latest build)
+          make_latest: true
+          files: DSE-Desk.apk
+          body: Built from ${{ github.sha }}. Download DSE-Desk.apk on your phone and install it.
