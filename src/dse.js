@@ -224,3 +224,21 @@ export function marketStatus(now = new Date()) {
   const open = tradingDay && mins >= 600 && mins < 870;
   return { open, tradingDay, label: open ? 'Market open' : 'Market closed', dhaka };
 }
+
+/**
+ * The trading day the latest-price page is showing: today once trading has started (10:00 Dhaka),
+ * otherwise the most recent Sun–Thu before it. On a weekday holiday this still says today, so callers
+ * that merge prices into history also compare against the last archived day (see sameAsArchived).
+ */
+export function lastTradeDay(now = new Date()) {
+  const { dhaka, tradingDay } = marketStatus(now);
+  const d = new Date(dhaka);
+  if (!(tradingDay && dhaka.getHours() >= 10)) {
+    do d.setDate(d.getDate() - 1); while (d.getDay() > 4);
+  }
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** True when a live quote is just the last archived day again (same volume and close), e.g. on a holiday */
+export const sameAsArchived = (q, close, volume) => q.volume === volume && Math.abs(q.ltp - close) < 1e-6;

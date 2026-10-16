@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { App } from '@capacitor/app';
 import Chart from 'chart.js/auto';
-import { fetchLatest, fetchIndex, fetchHistory, fetchMarketHistory, marketStatus } from './dse.js';
+import { fetchLatest, fetchIndex, fetchHistory, fetchMarketHistory, marketStatus, lastTradeDay, sameAsArchived } from './dse.js';
 import { computePortfolio, checkAlerts } from './portfolio.js';
 import { evaluate, mergeRules, DEFAULT_RULES } from './signals.js';
 import { demoQuotes, demoHistory } from './demo.js';
@@ -78,7 +78,7 @@ async function refresh({ silent = false } = {}) {
   document.querySelectorAll('[data-a="refresh"]').forEach((b) => b.classList.add('spin'));
   try {
     const quotes = await fetchLatest();
-    const day = today();
+    const day = lastTradeDay(); // on Fri/Sat or before 10:00 the page still shows the last trading day's prices
     for (const q of Object.values(quotes)) q._day = day;
     S.quotes = quotes;
     S.quotesAt = Date.now();
@@ -171,7 +171,7 @@ function withToday(code, rows) {
   const q = S.quotes[code];
   if (!q || !rows.length || S.demo) return rows;
   const last = rows[rows.length - 1];
-  if (q._day && q._day > last.date && q.volume > 0) return [...rows, { date: q._day, close: q.ltp, volume: q.volume }];
+  if (q._day && q._day > last.date && q.volume > 0 && !sameAsArchived(q, last.close, last.volume)) return [...rows, { date: q._day, close: q.ltp, volume: q.volume }];
   return rows;
 }
 const positionOf = (code) => { const h = held(code); return h ? { avg: h.avg, qty: h.qty } : null; };
@@ -444,7 +444,7 @@ function chartOpts({ legend = false, money = false } = {}) {
 function vMarket() {
   const all = Object.values(S.quotes);
   const m = marketStatus();
-  const head = `<header class="hd"><div><h1>Market</h1><div class="sub"><span class="dot ${m.open && !S.demo ? 'open' : ''}"></span><span>${S.demo ? 'Demo prices' : m.open ? 'DSE · open until 2:30 pm' : 'DSE · closed'} · ${ago(S.quotesAt)}</span></div></div>
+  const head = `<header class="hd"><div><h1>Market</h1><div class="sub"><span class="dot ${m.open && !S.demo ? 'open' : ''}"></span><span>${S.demo ? 'Demo prices' : m.open ? 'DSE · open until 2:30 pm' : `DSE · closed${shownDay() ? ` · showing ${shownDay()}` : ''}`} · ${ago(S.quotesAt)}</span></div></div>
     <button class="ibtn ${busy ? 'spin' : ''}" data-a="refresh" aria-label="Refresh prices">${ic('refresh', 20)}</button></header>${banner()}`;
   if (!all.length) return { nav: 'market', html: head + `<div class="card empty"><b>No prices yet</b>Tap refresh to load the latest DSE prices.<br><br><button class="btn sm" style="width:auto;padding:0 18px;margin:0 auto" data-a="refresh">Load prices</button></div>` };
   const adv = all.filter((q) => q.change > 0).length, dec = all.filter((q) => q.change < 0).length, same = all.length - adv - dec;
@@ -504,7 +504,7 @@ function periodStat(q, n) {
   let rows = per?.by[q.code];
   if (!rows?.length) return null;
   const last = rows[rows.length - 1];
-  if (q._day && q._day > last[0] && q.volume > 0) rows = [...rows, [q._day, q.ltp, q.ycp, q.value || 0, q.volume]];
+  if (q._day && q._day > last[0] && q.volume > 0 && !sameAsArchived(q, last[1], last[4])) rows = [...rows, [q._day, q.ltp, q.ycp, q.value || 0, q.volume]];
   const span = rows.slice(-n);
   const base = span[0][2] > 0 ? span[0][2] : span[0][1];
   const close = span[span.length - 1][1];
@@ -515,6 +515,12 @@ function periodStat(q, n) {
     value: span.reduce((s, r) => s + r[3], 0),
     volume: span.reduce((s, r) => s + r[4], 0),
   };
+}
+
+/** Trading day of the prices on screen, e.g. "Thu 15 Oct" (shown while the market is closed) */
+function shownDay() {
+  const d = Object.values(S.quotes)[0]?._day;
+  return d ? new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : '';
 }
 
 function fillMarket() {
