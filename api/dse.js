@@ -1,18 +1,23 @@
 // Vercel serverless function: fetches public DSE pages for the web version of DSE Desk.
-// Browsers can't read dsebd.org directly (no CORS), so the page asks this function instead.
+// Browsers can't read DSE directly (no CORS), so the page asks this function instead.
 // Only three fixed DSE pages are allowed — this is not an open proxy.
+// DSE retired www.dsebd.org in Oct 2026; the old pages still run on old.dsebd.org.
 
-const BASE = 'https://www.dsebd.org';
-const UA = 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Mobile Safari/537.36 DSE-Desk/1.1';
+const BASE = 'https://old.dsebd.org';
+const NEW = 'https://www.dse.com.bd';
+const UA = 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Mobile Safari/537.36 DSE-Desk/1.3';
 
 function target(q) {
   const page = String(q.page || '');
   if (page === 'latest') return { url: `${BASE}/latest_share_price_scroll_l.php`, ttl: 30 };
-  if (page === 'home') return { url: `${BASE}/`, ttl: 60 };
+  if (page === 'index') return { url: `${NEW}/indices/DSEX`, ttl: 120 };
   if (page === 'archive') {
     const d = /^\d{4}-\d{2}-\d{2}$/;
-    const inst = String(q.inst || '').toUpperCase();
-    if (!d.test(q.startDate || '') || !d.test(q.endDate || '') || !/^[A-Z0-9&.\-]{1,20}$/.test(inst)) return null;
+    // "All Instrument" returns every stock and only works in that exact case
+    const inst = String(q.inst || '') === 'All Instrument' ? 'All Instrument' : String(q.inst || '').toUpperCase();
+    if (!d.test(q.startDate || '') || !d.test(q.endDate || '') || !/^([A-Z0-9&.\-]{1,20}|All Instrument)$/.test(inst)) return null;
+    // a week of every stock is ~2.4 MB; keep whole-market requests to at most 7 days
+    if (inst === 'All Instrument' && (Date.parse(q.endDate) - Date.parse(q.startDate)) / 864e5 > 6) return null;
     return {
       url: `${BASE}/day_end_archive.php?startDate=${q.startDate}&endDate=${q.endDate}&inst=${encodeURIComponent(inst)}&archive=data`,
       ttl: 900,

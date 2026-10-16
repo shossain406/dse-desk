@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { App } from '@capacitor/app';
 import Chart from 'chart.js/auto';
-import { fetchLatest, fetchIndex, fetchHistory, marketStatus } from './dse.js';
+import { fetchLatest, fetchIndex, fetchHistory, fetchMarketHistory, marketStatus } from './dse.js';
 import { computePortfolio, checkAlerts } from './portfolio.js';
 import { evaluate, mergeRules, DEFAULT_RULES } from './signals.js';
 import { demoQuotes, demoHistory } from './demo.js';
@@ -27,7 +27,7 @@ function back() {
 function replace(name, p = {}) { stack[stack.length - 1] = { name, p }; render(); window.scrollTo(0, 0); }
 
 /* =============================== ui state =============================== */
-const ui = { mMode: 'all', mQ: '', tF: 'all', tQ: '', iP: 'year', sF: 'mine', vR: '1M', sR: 90, restoreOpen: false };
+const ui = { mMode: 'all', mPer: 'd', mQ: '', tF: 'all', tQ: '', iP: 'year', sF: 'mine', vR: '1M', sR: 90, restoreOpen: false };
 let busy = false;
 let charts = [];
 let mineSig = {}; // code -> evaluate() result
@@ -459,15 +459,86 @@ function vMarket() {
     </section>
     <div class="search">${ic('search', 18, 2, 'style="color:#667085"')}<input id="mq" placeholder="Search ${all.length} stocks" value="${esc(ui.mQ)}" autocapitalize="characters" autocomplete="off" aria-label="Search trading code"></div>
     <div class="chips">${[['all', 'All'], ['gain', 'Gainers'], ['lose', 'Losers'], ['value', 'Top value'], ['volume', 'Volume']].map(([v, l]) => chip(v, l, ui.mMode === v, 'mmode')).join('')}</div>
-    <div class="row" style="margin:16px 20px 8px;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px"><span>Stock</span><span>Last price · change</span></div>
+    ${ui.mMode !== 'all' ? `<div style="margin:12px 16px 0">${seg([['d', 'Daily'], [5, 'Weekly (5)'], [15, '15 days'], [18, '18 days']], ui.mPer, 'mper')}</div>` : ''}
+    <div class="row" style="margin:16px 20px 8px;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px"><span>Stock</span><span>Last price · ${ui.mMode !== 'all' && ui.mPer !== 'd' ? `${ui.mPer}-day change` : 'change'}</span></div>
     <div class="list" id="mlist"></div>`,
   after() { fillMarket(); $('#mq').addEventListener('input', (e) => { ui.mQ = e.target.value; fillMarket(); }); } };
 }
+
+/* ---- multi-day top lists (Weekly / 15 / 18 trading days), built from the whole-market day-end archive ---- */
+const PER_KEY = 'dsedesk.period';
+let per = (() => { try { return JSON.parse(localStorage.getItem(PER_KEY)); } catch { return null; } })(); // { day, at, demo, by: { CODE: [[date, close, ycp, value, volume]] } }
+let perLoad = null; // { done, total } while downloading
+let perErr = '';
+const perFresh = () => per && per.demo === S.demo && per.day === today() && Date.now() - per.at < 3 * 3600e3;
+
+async function loadPeriod() {
+  if (perLoad || perFresh()) return;
+  perLoad = { done: 0, total: 5 };
+  perErr = '';
+  try {
+    let by;
+    if (S.demo) {
+      by = {};
+      for (const q of Object.values(S.quotes)) {
+        const h = demoHistory(q, 35);
+        by[q.code] = h.map((r, i) => ({ ...r, ycp: i ? h[i - 1].close : r.close, value: (r.close * r.volume) / 1e6 }));
+      }
+    } else {
+      by = await fetchMarketHistory(35, (done, total) => { perLoad = { done, total }; if (cur().name === 'market') fillMarket(); });
+    }
+    const compact = {};
+    for (const [code, rows] of Object.entries(by)) compact[code] = rows.map((r) => [r.date, r.close, r.ycp, r.value || 0, r.volume || 0]);
+    per = { day: today(), at: Date.now(), demo: S.demo, by: compact };
+    try { localStorage.setItem(PER_KEY, JSON.stringify(per)); } catch {}
+  } catch (e) {
+    perErr = e.message || 'unknown error';
+  } finally {
+    perLoad = null;
+    if (cur().name === 'market') fillMarket();
+  }
+}
+
+/** Change, value and volume over the last n trading days, with today's live prices added if the archive doesn't have today yet */
+function periodStat(q, n) {
+  let rows = per?.by[q.code];
+  if (!rows?.length) return null;
+  const last = rows[rows.length - 1];
+  if (q._day && q._day > last[0] && q.volume > 0) rows = [...rows, [q._day, q.ltp, q.ycp, q.value || 0, q.volume]];
+  const span = rows.slice(-n);
+  const base = span[0][2] > 0 ? span[0][2] : span[0][1];
+  const close = span[span.length - 1][1];
+  return {
+    ...q,
+    changePct: base > 0 ? (close / base - 1) * 100 : 0,
+    change: close - base,
+    value: span.reduce((s, r) => s + r[3], 0),
+    volume: span.reduce((s, r) => s + r[4], 0),
+  };
+}
+
 function fillMarket() {
+  const box = $('#mlist');
+  if (!box) return;
+  const m = ui.mMode;
+  const n = m !== 'all' && ui.mPer !== 'd' ? +ui.mPer : 0;
   let list = Object.values(S.quotes);
+  if (n) {
+    if (!perFresh() && !perErr) loadPeriod();
+    if (perLoad || (!perFresh() && !per)) {
+      const p = perLoad || { done: 0, total: 5 };
+      box.innerHTML = `<div class="empty"><b>Loading ${n} days of prices…</b>Downloading the DSE archive for every stock (${p.done} of ${p.total} weeks). This happens once every few hours.
+        <div class="stack" style="height:6px;margin:14px auto 0;max-width:220px"><div style="width:${(p.done / p.total) * 100}%;background:var(--blue)"></div></div></div>`;
+      return;
+    }
+    if (perErr && !per) {
+      box.innerHTML = `<div class="empty"><b>Couldn't load past prices</b>${esc(perErr)}<br><br><button class="btn sm" style="width:auto;padding:0 18px;margin:0 auto" data-a="perretry">Try again</button></div>`;
+      return;
+    }
+    list = list.map((q) => periodStat(q, n)).filter(Boolean);
+  }
   const q = ui.mQ.trim().toUpperCase();
   if (q) list = list.filter((x) => x.code.includes(q));
-  const m = ui.mMode;
   if (m === 'gain') list = list.filter((x) => x.change > 0).sort((a, b) => b.changePct - a.changePct);
   else if (m === 'lose') list = list.filter((x) => x.change < 0).sort((a, b) => a.changePct - b.changePct);
   else if (m === 'value') list.sort((a, b) => (b.value || 0) - (a.value || 0));
@@ -475,11 +546,13 @@ function fillMarket() {
   else list.sort((a, b) => a.code.localeCompare(b.code));
   const owned = new Set(P().holdings.map((h) => h.code));
   const shown = list.slice(0, 150);
-  $('#mlist').innerHTML = shown.length ? shown.map((x) => `<button class="it" style="padding:13px 16px" data-a="stock" data-v="${esc(x.code)}">
-      <div class="l"><div class="t">${esc(x.code)}${owned.has(x.code) ? '<span class="tag">OWNED</span>' : ''}</div><div class="m n">${m === 'value' ? `৳${fmt(x.value, 2)} mn traded` : `Vol ${fmt(x.volume, 0)}`}</div></div>
+  const span = n ? ` in ${n} days` : '';
+  box.innerHTML = (n && perErr ? `<div class="empty" style="padding:12px 16px">Showing older data · couldn't refresh (${esc(perErr)}) · <button data-a="perretry" style="color:var(--blue);font-weight:700">Retry</button></div>` : '')
+    + (shown.length ? shown.map((x) => `<button class="it" style="padding:13px 16px" data-a="stock" data-v="${esc(x.code)}">
+      <div class="l"><div class="t">${esc(x.code)}${owned.has(x.code) ? '<span class="tag">OWNED</span>' : ''}</div><div class="m n">${m === 'value' ? `৳${fmt(x.value, 2)} mn traded${span}` : `Vol ${fmt(x.volume, 0)}${span}`}</div></div>
       <div class="r"><div class="p n">${fmt(x.ltp)}</div></div><span class="chg n ${cls(x.change)}">${pct(x.changePct)}</span></button>`).join('')
     + (list.length > 150 ? `<div class="empty" style="padding:16px">Showing 150 of ${list.length} — search to narrow down</div>` : '')
-    : `<div class="empty">No stock matches “${esc(q)}”</div>`;
+    : `<div class="empty">${q ? `No stock matches “${esc(q)}”` : 'Nothing to show'}</div>`);
 }
 
 /* =============================== watchlist =============================== */
@@ -1129,6 +1202,8 @@ document.addEventListener('click', async (e) => {
       save(); render(); break;
     }
     case 'mmode': ui.mMode = v; render(); break;
+    case 'mper': ui.mPer = v === 'd' ? 'd' : +v; render(); break;
+    case 'perretry': perErr = ''; fillMarket(); break;
     case 'tfilter': ui.tF = v; render(); break;
     case 'iperiod': ui.iP = v; render(); break;
     case 'vrange': ui.vR = v; render(); break;

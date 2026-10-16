@@ -1,21 +1,25 @@
-// DSE data layer: fetches and parses public pages from dsebd.org.
-// Android app: CapacitorHttp requests dsebd.org directly (no CORS limits).
-// Website: requests go through the site's own /api/dse function, which fetches dsebd.org server-side.
+// DSE data layer: fetches and parses public DSE pages.
+// DSE moved to dse.com.bd in Oct 2026 and retired the old pages on www.dsebd.org. The same pages still
+// run on old.dsebd.org, so prices and history come from there; the DSEX index comes from dse.com.bd.
+// Android app: CapacitorHttp requests DSE directly (no CORS limits).
+// Website: requests go through the site's own /api/dse function, which fetches DSE server-side.
 import { Capacitor } from '@capacitor/core';
 
-const BASE = 'https://www.dsebd.org';
+const BASE = 'https://old.dsebd.org';
+const NEW = 'https://www.dse.com.bd';
+export const ALL = 'All Instrument'; // archive "instrument" that returns every stock (DSE needs this exact case)
 export const VIA_PROXY = !Capacitor.isNativePlatform();
 const P = '/api/dse?page=';
 
 export const URLS = VIA_PROXY
   ? {
       latest: `${P}latest`,
-      home: `${P}home`,
+      index: `${P}index`,
       archive: (code, from, to) => `${P}archive&startDate=${from}&endDate=${to}&inst=${encodeURIComponent(code)}`,
     }
   : {
       latest: `${BASE}/latest_share_price_scroll_l.php`,
-      home: `${BASE}/`,
+      index: `${NEW}/indices/DSEX`,
       archive: (code, from, to) =>
         `${BASE}/day_end_archive.php?startDate=${from}&endDate=${to}&inst=${encodeURIComponent(code)}&archive=data`,
     };
@@ -125,24 +129,32 @@ export async function fetchLatest() {
   return q;
 }
 
-/** Best-effort DSEX index from the DSE home page */
+/** Best-effort DSEX index from the dse.com.bd index page ("Level 6,241.30 Prev close 6,222.90") */
 export function parseIndex(html) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('script,style').forEach((n) => n.remove());
   const text = (doc.body?.textContent || '').replace(/\s+/g, ' ');
-  const m = text.match(/DSEX\s*Index\s*([\d,]+\.\d+)\s*([-+]?[\d,]*\.?\d+)?\s*([-+]?[\d.]+%)?/i);
+  const m = text.match(/Level\s*([\d,]+\.\d+)\s*Prev close\s*([\d,]+\.\d+)/i);
   if (!m) return null;
-  return { value: num(m[1]), change: num(m[2]), changePct: m[3] ? num(m[3]) : NaN };
+  const value = num(m[1]), prev = num(m[2]);
+  if (!(value > 0)) return null;
+  const change = prev > 0 ? value - prev : NaN;
+  return { value, change, changePct: prev > 0 ? (change / prev) * 100 : NaN };
 }
 
+let ixCache = null; // the index page is ~500 KB, so fetch it at most every 5 minutes
 export async function fetchIndex() {
+  if (ixCache && Date.now() - ixCache.at < 5 * 60000) return ixCache.ix;
   try {
-    return parseIndex(await getText(URLS.home, 15000));
+    const ix = parseIndex(await getText(URLS.index, 20000));
+    if (ix) ixCache = { at: Date.now(), ix };
+    return ix;
   } catch {
     return null;
   }
 }
 
-/** Parse day-end archive: returns [{date, open, high, low, close, volume}] oldest first */
+/** Parse day-end archive: returns [{code, date, open, high, low, close, ycp, value, volume}] oldest first */
 export function parseArchive(html) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const table = findTable(doc, ['DATE', 'TRADINGCODE']);
@@ -158,11 +170,14 @@ export function parseArchive(html) {
     if (!(close > 0)) close = num(td[idx.ltp]);
     if (!(close > 0)) continue;
     out.push({
+      code: (td[idx.code] || '').replace(/\s+/g, '').toUpperCase(),
       date,
       open: num(td[idx.open]),
       high: num(td[idx.high]),
       low: num(td[idx.low]),
       close,
+      ycp: num(td[idx.ycp]),
+      value: num(td[idx.value]), // BDT million
       volume: num(td[idx.volume]),
     });
   }
@@ -175,6 +190,29 @@ export async function fetchHistory(code, days) {
   const from = new Date(Date.now() - days * 864e5);
   const f = (d) => d.toISOString().slice(0, 10);
   return parseArchive(await getText(URLS.archive(code, f(from), f(to)), 30000));
+}
+
+/**
+ * Day-end rows for every stock over the last `calDays` calendar days: { CODE: [rows oldest first] }.
+ * Fetched a week at a time (~2.4 MB each) so each response stays small enough for the website's server function.
+ */
+export async function fetchMarketHistory(calDays, onProgress) {
+  const f = (d) => d.toISOString().slice(0, 10);
+  const end = Date.now();
+  const weeks = [];
+  for (let back = 0; back < calDays; back += 7) {
+    weeks.push([f(new Date(end - Math.min(back + 6, calDays - 1) * 864e5)), f(new Date(end - back * 864e5))]);
+  }
+  const by = {};
+  let done = 0;
+  await Promise.all(weeks.map(async ([from, to]) => {
+    const rows = parseArchive(await getText(URLS.archive(ALL, from, to), 60000));
+    for (const r of rows) (by[r.code] ||= []).push(r);
+    onProgress?.(++done, weeks.length);
+  }));
+  for (const k in by) by[k].sort((a, b) => a.date.localeCompare(b.date));
+  if (Object.keys(by).length < 10) throw new Error('Could not read the DSE archive');
+  return by;
 }
 
 /** DSE trades Sun–Thu, 10:00–14:30 Dhaka time (UTC+6). Holidays are not tracked. */

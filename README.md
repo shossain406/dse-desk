@@ -36,7 +36,7 @@ If the build fails, open the red step on the Actions page, take a screenshot and
 
 - **First run:** welcome, broker commission and notification setup, and adding your first holding with its average price.
 - **Portfolio:** total value, today's change, value-vs-cost chart (1W–All, from daily snapshots), invested, unrealized/realized P/L, dividends, total return, a signals summary, allocation, DSEX, holdings.
-- **Market:** all listed DSE stocks, refreshed every minute while the market is open. Advance/decline, turnover, search, gainers/losers/top value/volume.
+- **Market:** all listed DSE stocks, refreshed every minute while the market is open. Advance/decline, turnover, search, gainers/losers/top value/volume for today or the last 5, 15 or 18 trading days.
 - **Watchlist:** target, stop-loss and big-daily-move alerts, a price-range bar, and a log of every alert that fired.
 - **Stock page:** price chart (1M–3Y) with volume and your average cost, today's trading, 52-week range, your position with break-even, the signal for this stock, alerts, and your trades in it.
 - **Add trade:** buy, sell, cash dividend, bonus shares. Commission is auto-filled, and you see the total and your new average cost before saving.
@@ -46,7 +46,8 @@ If the build fails, open the red step on the Actions page, take a screenshot and
 
 ## Good to know
 
-- Prices come from dsebd.org's public pages, which run a few minutes behind live trading. Holidays aren't tracked.
+- Prices and history come from the public pages on old.dsebd.org, and the DSEX index from dse.com.bd. DSE retired the www.dsebd.org pages in Oct 2026. The data runs a few minutes behind live trading. Holidays aren't tracked.
+- The 5/15/18-day lists download about 5 weeks of day-end prices for every stock (~12 MB). This happens at most every 3 hours.
 - Alerts and signals are checked while the app is open or each time you open it. Android doesn't let a simple app poll a website every minute in the background.
 - The whole-market scan downloads a year of history for every stock, about 400 requests. Run it on Wi-Fi. It takes a few minutes and is saved for the day.
 - Signals are mechanical rules on price and volume. They ignore earnings, news and company health, and they are not investment advice.
@@ -60,7 +61,7 @@ npm run build:web     # bundles src/ → www/app.js
 npm run build:apk     # needs JDK 21 + Android SDK 36; APK at android/app/build/outputs/apk/release/
 ```
 
-Browser preview: `npm run build:web`, serve `www/`, tap "Load demo prices" (browsers can't reach dsebd.org).
+Browser preview: `npm run build:web`, serve `www/`, tap "Load demo prices" (browsers can't reach DSE directly).
 
 ```
 src/app.js        screens, navigation, refresh loop, alerts, signals UI
