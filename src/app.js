@@ -8,13 +8,16 @@ import { evaluate, mergeRules, DEFAULT_RULES } from './signals.js';
 import { demoQuotes, demoHistory } from './demo.js';
 import { S, setState, save, load, defaults, histGet, histSet, histClear, KEY, esc, fmt, tk, sgn, sgnTk, pct, cls, arrow, today, uid, dShort, dLong, monthName, timeOf, ago, initials, monoColor } from './store.js';
 import { ic } from './icons.js';
+import { picksScreen, stockShariahCard, portfolioShariah } from './picks/ui.js';
+import { updatePicks, progress as pkProgress, loadScan, loadHistory, isDue, news as pkNews, kvClear as pkClear } from './picks/data.js';
+import { upd, APP_VERSION, checkForUpdate, applyWebUpdate, openApkDownload, dismissUpdate, bannerWanted, markBootOk, resetToBuiltIn } from './update.js';
 
 const isNative = Capacitor.isNativePlatform();
 const $ = (s) => document.querySelector(s);
 const app = $('#app');
 
 /* =============================== navigation =============================== */
-const TABS = ['portfolio', 'market', 'watch', 'insights'];
+const TABS = ['portfolio', 'market', 'picks', 'watch', 'insights'];
 let stack = [{ name: S.onboarded ? 'portfolio' : 'welcome', p: {} }];
 const cur = () => stack[stack.length - 1];
 function go(name, p = {}) { cur().y = window.scrollY; stack.push({ name, p }); render(); window.scrollTo(0, 0); }
@@ -64,7 +67,16 @@ function statusLine() {
   const label = S.demo ? 'Demo prices' : m.open ? 'Market open' : 'Market closed';
   return `<div class="sub"><span class="dot ${m.open && !S.demo ? 'open' : ''}"></span><span>${label} · ${ago(S.quotesAt)}</span></div>`;
 }
+function updBanner() {
+  if (!bannerWanted()) return '';
+  const r = upd.remote;
+  if (upd.applying) return `<div class="updbox"><b>Updating to ${esc(r.version)}</b> · ${esc(upd.progress || 'please wait…')}</div>`;
+  if (upd.kind === 'web') return `<div class="updbox"><div><b>Update ${esc(r.version)} is ready</b>${r.notes ? ` · ${esc(r.notes)}` : ''}<br><span>Installs in a few seconds. Your data stays.</span></div><div class="updacts"><button class="btn sm" data-a="upd-apply">Update now</button><button class="tbtn link" data-a="upd-later">Later</button></div></div>`;
+  return `<div class="updbox"><div><b>New app version ${esc(r.nativeVersion || r.version)}</b>${r.notes ? ` · ${esc(r.notes)}` : ''}<br><span>Download it, then tap Install. Your data stays.</span></div><div class="updacts"><button class="btn sm" data-a="upd-apk">Download</button><button class="tbtn link" data-a="upd-later">Later</button></div></div>`;
+}
 function banner() {
+  if (upd.error && upd.applying === false && bannerWanted()) return `<div class="warnbox">${esc(upd.error)}</div>` + updBanner();
+  if (bannerWanted()) return updBanner();
   if (S.demo) return `<div class="warnbox">Showing <b>demo prices</b>, not live. <button data-a="refresh">Load live prices</button></div>`;
   if (banner.err) return `<div class="warnbox">${banner.err}</div>`;
   return '';
@@ -232,7 +244,7 @@ function nav(active) {
   const t = (name, label, icon) => `<button class="tab ${active === name ? 'on' : ''}" data-a="tab" data-v="${name}" ${active === name ? 'aria-current="page"' : ''}>${ic(icon, 22)}${label}</button>`;
   return `<nav class="nav" aria-label="Main">${t('portfolio', 'Portfolio', 'pie')}${t('market', 'Market', 'trend')}
     <button data-a="newtrade" aria-label="Add trade"><span class="fabc">${ic('plus', 24, 2.4)}</span></button>
-    ${t('watch', 'Watchlist', 'eye')}${t('insights', 'Insights', 'bars')}</nav>`;
+    ${t('picks', 'Picks', 'shield')}${t('watch', 'Watchlist', 'eye')}</nav>`;
 }
 const bar = (title, { close = false, right = '', center = false } = {}) =>
   `<div class="bar"><button class="back" data-a="back" aria-label="${close ? 'Close' : 'Back'}">${ic(close ? 'close' : 'back', 22, 2)}</button>
@@ -371,6 +383,7 @@ function vPortfolio() {
       <div style="flex:1;min-width:0"><div style="font-weight:750">Signals</div><div style="font-size:12.5px;color:var(--muted)">${sig.text}</div></div>
       ${sig.count ? `<span class="n" style="min-width:24px;height:24px;padding:0 6px;border-radius:12px;background:var(--purple);color:#fff;font-size:12px;font-weight:750;display:grid;place-items:center">${sig.count}</span>` : `<span style="color:var(--faint)">${ic('chev', 18, 2)}</span>`}
     </button>
+    ${portfolioShariah(pk.scan, p.holdings.map((h) => h.code))}
     ${missing.length ? `<div class="warnbox">No live price for ${esc(missing.join(', '))} — valued at cost. Check the trading code.</div>` : ''}
     <section class="card">
       <div class="row"><h2>Allocation</h2><span style="font-size:12.5px;color:var(--muted)">by market value</span></div>
@@ -729,6 +742,7 @@ function vStock({ code }) {
       </div>
       ${pos.realized ? `<div class="n" style="font-size:12.5px;color:var(--muted);margin-top:10px">Realized so far: <b class="${cls(pos.realized)}">${sgnTk(pos.realized)}</b></div>` : ''}</section>`
       : pos && (pos.realized || pos.dividends) ? `<div class="card tight n" style="font-size:13px;color:var(--muted)">Closed position · realized <b class="${cls(pos.realized)}">${sgnTk(pos.realized)}</b> · dividends ${tk(pos.dividends)}</div>` : ''}
+    ${stockShariahCard(pk.scan, code)}
     <button class="card" style="display:block;width:calc(100% - 32px);text-align:left" data-a="go" data-v="rules">
       <div class="row"><div style="display:flex;align-items:center;gap:8px"><span style="font-weight:750">Signal</span>${sig ? `<span class="pill sm ${sideMeta[sig.side][1]}">${sideMeta[sig.side][0]}</span>` : '<span class="pill sm gray" id="s-sigpill">Checking…</span>'}</div><span style="font-size:13px;font-weight:700;color:var(--blue)">Rules</span></div>
       <div id="s-sig">${sig ? stockSigBody(sig, !!h) : ''}</div>
@@ -1153,15 +1167,74 @@ function vSettings() {
       <button class="setrow" data-a="csv">${ic('table', 20)}<div class="l"><span class="t">Export trades as CSV</span></div></button>
       <button class="setrow" style="color:var(--down)" data-a="wipe">${ic('trash', 20)}<div class="l"><span class="t">Erase all data</span></div></button>
     </div>
-    <div style="margin:24px 24px 0;text-align:center;font-size:12.5px;color:var(--muted);line-height:1.55"><div style="font-weight:750;color:var(--ink-2)">DSE Desk 1.2</div>Prices from the Dhaka Stock Exchange website, a few minutes delayed. Signals are mechanical rules, not investment advice. ${isNative ? '' : '<br>Web version.'}</div>`,
+    <h2 class="section-t">App updates</h2>
+    <div class="list">${updSettings()}</div>
+    <div style="margin:24px 24px 0;text-align:center;font-size:12.5px;color:var(--muted);line-height:1.55"><div style="font-weight:750;color:var(--ink-2)">DSE Desk ${esc(APP_VERSION)}</div>Prices from the Dhaka Stock Exchange website, a few minutes delayed. Signals are mechanical rules, not investment advice. ${isNative ? '' : '<br>Web version.'}</div>`,
   after() {
     $('#s-comm').addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (v >= 0) { S.settings.commissionPct = v; save(); toast('Commission saved'); } });
     $('#s-ref').addEventListener('change', (e) => { S.settings.refreshSec = Math.max(30, parseInt(e.target.value) || 60); e.target.value = S.settings.refreshSec; save(); schedule(); toast('Refresh interval saved'); });
   } };
 }
 
+function updSettings() {
+  const v = `<div class="setrow"><div class="l"><span class="t">Version</span><span class="d">${esc(APP_VERSION)}${upd.fromUpdate ? ' (quick update)' : ''}${upd.native ? ` · app build ${esc(upd.native.build)}` : ''}</span></div></div>`;
+  if (!upd.supported) return v + `<div class="setrow"><div class="l"><span class="t">Updates</span><span class="d">${isNative ? 'Update checks are not set up in this build' : 'The website always shows the newest version — just reload'}</span></div></div>`;
+  const r = upd.remote;
+  let status;
+  if (upd.checking) status = 'Checking…';
+  else if (upd.applying) status = esc(upd.progress || 'Updating…');
+  else if (upd.error) status = esc(upd.error);
+  else if (upd.kind === 'web') status = `Update ${esc(r.version)} is ready to install`;
+  else if (upd.kind === 'apk') status = `New app version ${esc(r.nativeVersion || r.version)} — download and install`;
+  else if (upd.checkedAt) status = `Up to date · checked ${esc(timeOf(upd.checkedAt))}`;
+  else status = 'Checks automatically when you open the app';
+  const action = upd.kind === 'web' ? `<button class="setrow" style="color:var(--blue);font-weight:700" data-a="upd-apply" ${upd.applying ? 'disabled' : ''}>${ic('download', 20)}<div class="l"><span class="t">Install update ${esc(r.version)}</span><span class="d">Takes a few seconds, keeps your data</span></div></button>`
+    : upd.kind === 'apk' ? `<button class="setrow" style="color:var(--blue);font-weight:700" data-a="upd-apk">${ic('download', 20)}<div class="l"><span class="t">Download new app</span><span class="d">Then tap Install on Android's screen</span></div></button>`
+    : `<button class="setrow" style="color:var(--blue);font-weight:700" data-a="upd-check" ${upd.checking ? 'disabled' : ''}>${ic('refresh', 20)}<div class="l"><span class="t">Check for updates</span></div></button>`;
+  const reset = upd.fromUpdate ? `<button class="setrow" data-a="upd-reset"><div class="l"><span class="t">Go back to the installed version</span><span class="d">Removes the quick update if something looks wrong</span></div></button>` : '';
+  return v + `<div class="setrow"><div class="l"><span class="t">Status</span><span class="d">${status}</span></div></div>` + action + reset;
+}
+async function runUpdateCheck(manual = false) {
+  if (!upd.supported) return;
+  const p = checkForUpdate({ manual });
+  if (manual) render();
+  await p;
+  if (manual && !upd.kind && !upd.error) toast('You have the newest version');
+  if (manual || bannerWanted() || cur().name === 'settings') render();
+}
+
+/* =============================== Shariah picks =============================== */
+const pk = { scan: null, hist: null, h: 6, n: 10, open: null, news: {}, showAcc: false };
+function vPicks() {
+  const owned = new Set(P().holdings.map((h) => h.code)), watched = new Set(S.watch.map((w) => w.code));
+  return { nav: 'picks', html: picksScreen({ ...pk, progress: pkProgress, native: isNative, owned, watched }) };
+}
+async function runPicks({ silent = false } = {}) {
+  if (pkProgress.running) return;
+  try {
+    pk.scan = await updatePicks(() => {
+      if (cur().name !== 'picks') return;
+      const bar = $('#pk-bar');
+      if (bar && pkProgress.running) { bar.style.width = (pkProgress.total ? Math.round((pkProgress.done / pkProgress.total) * 100) : 4) + '%'; $('#pk-step').textContent = pkProgress.step; $('#pk-count').textContent = pkProgress.total ? `${pkProgress.done} of ${pkProgress.total}` : ''; }
+      else render();
+    });
+    pk.hist = await loadHistory();
+    if (!silent) toast('Picks updated');
+  } catch { if (!silent) toast(pkProgress.error ? `Couldn't update picks: ${pkProgress.error}` : "Couldn't update picks", 4000); }
+  if (['picks', 'portfolio', 'stock'].includes(cur().name)) render();
+}
+async function picksMaybeAuto() { if (isNative && !pkProgress.running && (await isDue())) runPicks({ silent: true }); }
+async function openPick(code) {
+  pk.open = pk.open === code ? null : code;
+  render();
+  if (pk.open && !(code in pk.news)) {
+    try { pk.news[code] = await pkNews(code); } catch { pk.news[code] = null; }
+    if (cur().name === 'picks' && pk.open === code) render();
+  }
+}
+
 /* =============================== render =============================== */
-const VIEWS = { welcome: vWelcome, setup: vSetup, first: vFirst, portfolio: vPortfolio, market: vMarket, watch: vWatch, insights: vInsights, stock: vStock, trade: vTrade, alert: vAlert, trades: vTrades, alerts: vAlerts, signals: vSignals, rules: vRules, settings: vSettings };
+const VIEWS = { picks: vPicks, welcome: vWelcome, setup: vSetup, first: vFirst, portfolio: vPortfolio, market: vMarket, watch: vWatch, insights: vInsights, stock: vStock, trade: vTrade, alert: vAlert, trades: vTrades, alerts: vAlerts, signals: vSignals, rules: vRules, settings: vSettings };
 function render() {
   killCharts();
   // fresh #app node each render so per-view listeners don't pile up
@@ -1223,6 +1296,19 @@ document.addEventListener('click', async (e) => {
     case 'resetrules': if (confirm('Reset all signal rules to the defaults?')) { S.rules = mergeRules(null); save(); render(); } break;
     case 'saverules': readRules(); save(); mineSig = {}; mineDay = null; S.scan = null; save(); stack.pop(); render(); computeMine(true); toast('Rules saved — rechecking your stocks'); break;
     case 'stog': S.settings[v] = !S.settings[v]; if (S.settings[v] && (v === 'notify' || v === 'closeSummary') && !(await askNotify())) toast('Notifications are blocked — allow them in Android settings'); save(); render(); break;
+    case 'pk-update': runPicks(); render(); break;
+    case 'pk-h': pk.h = +v; pk.n = 10; pk.open = null; render(); break;
+    case 'pk-n': pk.n = +v; render(); break;
+    case 'pk-open': openPick(v); break;
+    case 'pk-acc': pk.showAcc = true; render(); setTimeout(() => document.querySelector('.pkacc')?.closest('.card')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 30); break;
+    case 'upd-check': runUpdateCheck(true); break;
+    case 'upd-later': dismissUpdate(); render(); toast('Update is waiting in Settings → App updates'); break;
+    case 'upd-apk': openApkDownload(); break;
+    case 'upd-reset': if (confirm('Go back to the version that came with the installed app?')) resetToBuiltIn(); break;
+    case 'upd-apply':
+      upd.progress = 'Starting…'; render();
+      applyWebUpdate((t) => { upd.progress = t; render(); }).catch(() => { toast(upd.error || 'Update failed', 5000); render(); });
+      break;
     case 'testnotify': await askNotify(); await notify('DSE Desk alert', 'This is a test — your alerts will look like this.'); toast('Test alert sent'); break;
     case 'backup': {
       const data = JSON.stringify({ app: 'dse-desk', v: 2, at: new Date().toISOString(), trades: S.trades, watch: S.watch, settings: S.settings, rules: S.rules, snapshots: S.snapshots, alertLog: S.alertLog });
@@ -1247,7 +1333,7 @@ document.addEventListener('click', async (e) => {
       break;
     }
     case 'wipe':
-      if (confirm('Erase all trades, watchlist, alerts and settings on this phone? This cannot be undone.')) { localStorage.removeItem(KEY); histClear(); setState(load()); mineSig = {}; stack = [{ name: 'welcome', p: {} }]; render(); toast('All data erased'); }
+      if (confirm('Erase all trades, watchlist, alerts and settings on this phone? This cannot be undone.')) { localStorage.removeItem(KEY); histClear(); pkClear(); pk.scan = null; pk.hist = null; setState(load()); mineSig = {}; stack = [{ name: 'welcome', p: {} }]; render(); toast('All data erased'); }
       break;
     // onboarding
     case 'ob': stack = [{ name: v, p: {} }]; render(); window.scrollTo(0, 0); break;
@@ -1290,10 +1376,20 @@ function schedule() {
     else if (TABS.includes(cur().name)) { const sub = document.querySelector('.hd .sub span:last-child'); if (sub) sub.textContent = sub.textContent.replace(/updated.*$/, ago(S.quotesAt)); }
   }, Math.max(30, S.settings.refreshSec) * 1000);
 }
+let lastUpdCheck = 0;
 if (isNative) {
   App.addListener('backButton', back);
-  App.addListener('appStateChange', ({ isActive }) => { if (isActive) refresh({ silent: true }); });
+  App.addListener('appStateChange', ({ isActive }) => {
+    if (!isActive) return;
+    refresh({ silent: true });
+    if (Date.now() - lastUpdCheck > 6 * 3600e3) { lastUpdCheck = Date.now(); runUpdateCheck(); }
+    picksMaybeAuto();
+  });
 }
 render();
+markBootOk(); // this version started fine (see the update loader in index.html)
 schedule();
 refresh({ silent: true });
+setTimeout(() => { lastUpdCheck = Date.now(); runUpdateCheck(); }, 3000);
+// Shariah picks: show the saved scan, then bring it up to date after the market closes (adds ~1–2 MB a day)
+Promise.all([loadScan(), loadHistory()]).then(([sc, hi]) => { pk.scan = sc || null; pk.hist = hi; if (['picks', 'portfolio', 'stock'].includes(cur().name)) render(); setTimeout(picksMaybeAuto, 6000); }).catch(() => {});

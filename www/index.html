@@ -9,12 +9,71 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
-  <link rel="stylesheet" href="styles.css" />
+  <link id="base-css" rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <div id="app"></div>
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
-  <script src="app.js"></script>
+  <script>
+    // Starts the app. In the Android app this first looks for a quick update downloaded earlier
+    // (see src/update.js) and runs it if it is newer than the version inside the APK.
+    // If that update failed to start last time, it is thrown away and the APK's own version runs.
+    (function () {
+      var TRY = 'dsedesk.ota.trying';
+      var started = false;
+      function builtIn() {
+        if (started) return; started = true;
+        var s = document.createElement('script'); s.src = 'app.js'; document.body.appendChild(s);
+      }
+      function cmp(a, b) {
+        a = String(a || '0').split('.'); b = String(b || '0').split('.');
+        for (var i = 0; i < Math.max(a.length, b.length); i++) { var d = (parseInt(a[i]) || 0) - (parseInt(b[i]) || 0); if (d) return d; }
+        return 0;
+      }
+      function withDb(fn) {
+        var r = indexedDB.open('dsedesk-ota', 1);
+        r.onupgradeneeded = function () { r.result.createObjectStore('kv'); };
+        r.onsuccess = function () { fn(r.result); };
+        r.onerror = function () { builtIn(); };
+      }
+      function drop(db) { try { db.transaction('kv', 'readwrite').objectStore('kv').delete('bundle'); } catch (e) {} }
+      var isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+      if (!isNative || !window.indexedDB) return builtIn();
+      setTimeout(builtIn, 4000); // never leave the screen blank
+      try {
+        withDb(function (db) {
+          var failed = null;
+          try { failed = localStorage.getItem(TRY); localStorage.removeItem(TRY); } catch (e) {}
+          var g = db.transaction('kv', 'readonly').objectStore('kv').get('bundle');
+          g.onerror = function () { builtIn(); };
+          g.onsuccess = function () {
+            var b = g.result;
+            if (!b) return builtIn();
+            if (failed && failed === b.version) {
+              try { localStorage.setItem('dsedesk.ota.bad', b.version); } catch (e) {}
+              drop(db); return builtIn();
+            }
+            var x = new XMLHttpRequest();
+            x.open('GET', 'version.json');
+            x.onload = function () {
+              var local = null; try { local = JSON.parse(x.responseText); } catch (e) {}
+              // Use the update only if it is newer than the APK's own copy and this APK can run it.
+              if (!local || cmp(b.version, local.version) <= 0 || (b.minNative || 0) > (local.nativeBuild || 0)) { drop(db); return builtIn(); }
+              if (started) return;
+              started = true;
+              try { localStorage.setItem(TRY, b.version); } catch (e) {}
+              window.__OTA_VERSION__ = b.version;
+              document.getElementById('base-css').disabled = true;
+              var st = document.createElement('style'); st.textContent = b.css; document.head.appendChild(st);
+              var sc = document.createElement('script'); sc.textContent = b.js; document.body.appendChild(sc);
+            };
+            x.onerror = function () { builtIn(); };
+            x.send();
+          };
+        });
+      } catch (e) { builtIn(); }
+    })();
+  </script>
   <script>
     if ('serviceWorker' in navigator && location.protocol === 'https:' && !window.Capacitor) {
       window.addEventListener('load', function () { navigator.serviceWorker.register('/sw.js').catch(function () {}); });

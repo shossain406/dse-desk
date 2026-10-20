@@ -8,6 +8,11 @@ on:
 permissions:
   contents: write
 
+# a newer push cancels an older build that is still running
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -71,5 +76,13 @@ jobs:
           tag_name: latest
           name: DSE Desk (latest build)
           make_latest: true
-          files: DSE-Desk.apk
-          body: Built from ${{ github.sha }}. Download DSE-Desk.apk on your phone and install it.
+          # app.js, styles.css and version.json are what the app downloads for quick in-app updates
+          # (see src/update.js). version.json goes last: it announces the new build.
+          files: |
+            DSE-Desk.apk
+            www/app.js
+            www/styles.css
+            www/version.json
+          body: |
+            Built from ${{ github.sha }}.
+            New phone: download DSE-Desk.apk and install it. Already installed: the app updates itself (Settings → App updates).

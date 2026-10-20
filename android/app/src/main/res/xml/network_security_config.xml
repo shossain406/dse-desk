@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  old.dsebd.org (DSE's old site, where prices still come from) sends an incomplete certificate chain:
+  it leaves out Sectigo's "Public Server Authentication CA DV R36" intermediate. Browsers fetch the missing
+  piece themselves; Android does not, so requests fail with "Trust anchor for certification path not found".
+  This adds that one intermediate (res/raw/sectigo_dv_r36.pem, valid until 2036) as trusted for *.dsebd.org only,
+  next to the normal system certificates. Every other site uses the default Android rules.
+-->
+<network-security-config>
+    <domain-config>
+        <domain includeSubdomains="true">dsebd.org</domain>
+        <trust-anchors>
+            <certificates src="@raw/sectigo_dv_r36" />
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+</network-security-config>
