@@ -89,14 +89,16 @@ async function refresh({ silent = false } = {}) {
   busy = true;
   document.querySelectorAll('[data-a="refresh"]').forEach((b) => b.classList.add('spin'));
   try {
-    const quotes = await fetchLatest();
-    const day = lastTradeDay(); // on Fri/Sat or before 10:00 the page still shows the last trading day's prices
+    const [quotes, ix] = await Promise.all([fetchLatest(), fetchIndex()]);
+    // While the market is closed the page still shows the last trading day's prices. The index feed knows which
+    // day that was, holidays included; the calendar guess (Sun–Thu) is only the fallback.
+    const day = marketStatus().open ? today() : ix?.date || lastTradeDay();
     for (const q of Object.values(quotes)) q._day = day;
     S.quotes = quotes;
     S.quotesAt = Date.now();
     S.demo = false;
+    if (ix) S.index = ix;
     banner.err = '';
-    fetchIndex().then((ix) => { if (ix) { S.index = ix; save(); if (['portfolio', 'market'].includes(cur().name)) render(); } });
     afterQuotes();
     if (!silent) toast(`Prices updated · ${Object.keys(quotes).length} stocks`);
   } catch (e) {
@@ -413,7 +415,7 @@ function sigSummary() {
 function indexCard() {
   if (!S.index || S.demo) return '';
   const i = S.index;
-  return `<button class="linkcard" data-a="tab" data-v="market"><div style="flex:1"><div class="lbl">DSEX index</div><div class="n" style="font-size:17px;font-weight:750">${fmt(i.value)}</div></div>
+  return `<button class="linkcard" data-a="tab" data-v="market"><div style="flex:1"><div class="lbl">DSEX index${i.date && !marketStatus().open ? ` · ${dShort(i.date)} close` : ''}</div><div class="n" style="font-size:17px;font-weight:750">${fmt(i.value)}</div></div>
     ${isFinite(i.change) ? `<span class="pill ${cls(i.change)} n">${arrow(i.change)}${fmt(Math.abs(i.change))}${isFinite(i.changePct) ? ` (${pct(i.changePct)})` : ''}</span>` : ''}</button>`;
 }
 
@@ -465,7 +467,7 @@ function vMarket() {
   const ix = S.index && !S.demo ? S.index : null;
   return { nav: 'market', html: head + `
     <section class="card" style="margin-top:4px">
-      ${ix ? `<div class="row" style="align-items:flex-start"><div><div class="lbl" style="font-size:13px">DSEX index</div><div class="n" style="font-size:26px;font-weight:800;letter-spacing:-.4px">${fmt(ix.value)}</div></div>${isFinite(ix.change) ? `<span class="pill ${cls(ix.change)} n">${arrow(ix.change)}${fmt(Math.abs(ix.change))}${isFinite(ix.changePct) ? ` (${pct(ix.changePct)})` : ''}</span>` : ''}</div><div style="height:1px;background:var(--line-2);margin:14px 0"></div>` : ''}
+      ${ix ? `<div class="row" style="align-items:flex-start"><div><div class="lbl" style="font-size:13px">DSEX index${ix.date && !m.open ? ` · ${dShort(ix.date)} close` : ''}</div><div class="n" style="font-size:26px;font-weight:800;letter-spacing:-.4px">${fmt(ix.value)}</div></div>${isFinite(ix.change) ? `<span class="pill ${cls(ix.change)} n">${arrow(ix.change)}${fmt(Math.abs(ix.change))}${isFinite(ix.changePct) ? ` (${pct(ix.changePct)})` : ''}</span>` : ''}</div><div style="height:1px;background:var(--line-2);margin:14px 0"></div>` : ''}
       <div class="row n" style="font-size:12.5px;font-weight:700"><span class="up">▲ ${adv} up</span><span class="muted">${same} same</span><span class="down">${dec} down ▼</span></div>
       <div class="stack" style="height:8px;margin-top:8px"><div style="width:${(adv / all.length) * 100}%;background:var(--up-mid)"></div><div style="width:${(same / all.length) * 100}%;background:#D0D5DD"></div><div style="width:${(dec / all.length) * 100}%;background:var(--down-mid)"></div></div>
       <div class="row" style="margin-top:12px;font-size:13px"><span class="muted">Turnover</span><span class="n" style="font-weight:750">৳${fmt(turnover / 10, 1)} crore</span></div>

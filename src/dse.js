@@ -1,12 +1,13 @@
 // DSE data layer: fetches and parses public DSE pages.
 // DSE moved to dse.com.bd in Oct 2026 and retired the old pages on www.dsebd.org. The same pages still
-// run on old.dsebd.org, so prices and history come from there; the DSEX index comes from dse.com.bd.
+// run on old.dsebd.org, so prices and history come from there. The DSEX index comes from BullBD's day-end
+// feed (dse.com.bd's index page showed a fixed "indicative level" that never changed).
 // Android app: CapacitorHttp requests DSE directly (no CORS limits).
 // Website: requests go through the site's own /api/dse function, which fetches DSE server-side.
 import { Capacitor } from '@capacitor/core';
 
 const BASE = 'https://old.dsebd.org';
-const NEW = 'https://www.dse.com.bd';
+const BB = 'https://provider.bullbd.com';
 export const ALL = 'All Instrument'; // archive "instrument" that returns every stock (DSE needs this exact case)
 export const VIA_PROXY = !Capacitor.isNativePlatform();
 const P = '/api/dse?page=';
@@ -14,12 +15,12 @@ const P = '/api/dse?page=';
 export const URLS = VIA_PROXY
   ? {
       latest: `${P}latest`,
-      index: `${P}index`,
+      index: () => `${P}index`,
       archive: (code, from, to) => `${P}archive&startDate=${from}&endDate=${to}&inst=${encodeURIComponent(code)}`,
     }
   : {
       latest: `${BASE}/latest_share_price_scroll_l.php`,
-      index: `${NEW}/indices/DSEX`,
+      index: () => `${BB}/shares/get-eod-data-count?code=DSEX&upto=${new Date(Date.now() + 2 * 864e5).toISOString().slice(0, 10)}&count=3&col=d:1,c:1,_id:0`,
       archive: (code, from, to) =>
         `${BASE}/day_end_archive.php?startDate=${from}&endDate=${to}&inst=${encodeURIComponent(code)}&archive=data`,
     };
@@ -122,31 +123,38 @@ export function parseLatest(html) {
   return out;
 }
 
+/** The price page says "Market Status: Open/Closed". It knows about holidays; the clock in marketStatus() doesn't. */
+export function parseMarketFlag(html) {
+  const m = String(html).replace(/<[^>]+>/g, ' ').match(/Market Status\s*:?\s*(Open|Closed)/i);
+  return m ? m[1].toLowerCase() === 'open' : null;
+}
+let liveFlag = null; // { open, at } from the last price page
+
 export async function fetchLatest() {
   const html = await getText(URLS.latest);
+  const open = parseMarketFlag(html);
+  if (open != null) liveFlag = { open, at: Date.now() };
   const q = parseLatest(html);
   if (Object.keys(q).length < 10) throw new Error('Could not read the DSE price table');
   return q;
 }
 
-/** Best-effort DSEX index from the dse.com.bd index page ("Level 6,241.30 Prev close 6,222.90") */
-export function parseIndex(html) {
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  doc.querySelectorAll('script,style').forEach((n) => n.remove());
-  const text = (doc.body?.textContent || '').replace(/\s+/g, ' ');
-  const m = text.match(/Level\s*([\d,]+\.\d+)\s*Prev close\s*([\d,]+\.\d+)/i);
-  if (!m) return null;
-  const value = num(m[1]), prev = num(m[2]);
-  if (!(value > 0)) return null;
+/** DSEX from BullBD's day-end feed: [{d, c}, ...]. date = the last trading day (so holidays are skipped). */
+export function parseIndex(text) {
+  let rows;
+  try { rows = JSON.parse(text); } catch { return null; }
+  rows = (Array.isArray(rows) ? rows : []).filter((r) => r && r.c > 0 && r.d).sort((a, b) => (a.d < b.d ? 1 : -1));
+  if (!rows.length) return null;
+  const value = rows[0].c, prev = rows[1]?.c;
   const change = prev > 0 ? value - prev : NaN;
-  return { value, change, changePct: prev > 0 ? (change / prev) * 100 : NaN };
+  return { value, change, changePct: prev > 0 ? (change / prev) * 100 : NaN, date: rows[0].d.slice(0, 10) };
 }
 
-let ixCache = null; // the index page is ~500 KB, so fetch it at most every 5 minutes
+let ixCache = null; // fetch at most every 2 minutes
 export async function fetchIndex() {
-  if (ixCache && Date.now() - ixCache.at < 5 * 60000) return ixCache.ix;
+  if (ixCache && Date.now() - ixCache.at < 2 * 60000) return ixCache.ix;
   try {
-    const ix = parseIndex(await getText(URLS.index, 20000));
+    const ix = parseIndex(await getText(URLS.index(), 20000));
     if (ix) ixCache = { at: Date.now(), ix };
     return ix;
   } catch {
@@ -221,7 +229,8 @@ export function marketStatus(now = new Date()) {
   const day = dhaka.getDay(); // 0 Sun ... 6 Sat
   const mins = dhaka.getHours() * 60 + dhaka.getMinutes();
   const tradingDay = day >= 0 && day <= 4;
-  const open = tradingDay && mins >= 600 && mins < 870;
+  // the DSE price page's own status wins when it says closed (holidays); it is re-read on every refresh
+  const open = tradingDay && mins >= 600 && mins < 870 && !(liveFlag && !liveFlag.open && Date.now() - liveFlag.at < 5 * 60000);
   return { open, tradingDay, label: open ? 'Market open' : 'Market closed', dhaka };
 }
 

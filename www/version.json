@@ -1,16 +1,16 @@
 {
   "app": "dse-desk",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "nativeBuild": 5,
   "nativeVersion": "1.4",
   "minNative": 5,
   "apk": "DSE-Desk.apk",
-  "notes": "Shariah picks tab, in-app updates, fix for DSE certificate on Android",
-  "builtAt": "2026-10-20T10:11:40.490Z",
+  "notes": "Correct DSEX index, holiday-aware market status and price dates",
+  "builtAt": "2026-10-22T03:27:29.059Z",
   "files": {
     "app.js": {
-      "sha256": "dd8d9ea236e235ec309297ad3e3dce07e453cde00d2da029186f873043bf7b16",
-      "size": 431366
+      "sha256": "e1b81800c885b7005cb8d7378b2cbcf0da7e48042f50b473ac5bcdf6603da5c5",
+      "size": 431729
     },
     "styles.css": {
       "sha256": "1e10bc33f4d1c850927231aafb247c29c6cc7158689b35c8f17df0857c5c701f",

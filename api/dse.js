@@ -4,13 +4,14 @@
 // DSE retired www.dsebd.org in Oct 2026; the old pages still run on old.dsebd.org.
 
 const BASE = 'https://old.dsebd.org';
-const NEW = 'https://www.dse.com.bd';
+const BB = 'https://provider.bullbd.com';
 const UA = 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Mobile Safari/537.36 DSE-Desk/1.3';
 
 function target(q) {
   const page = String(q.page || '');
   if (page === 'latest') return { url: `${BASE}/latest_share_price_scroll_l.php`, ttl: 30 };
-  if (page === 'index') return { url: `${NEW}/indices/DSEX`, ttl: 120 };
+  // DSEX day-end closes (dse.com.bd's index page showed a fixed placeholder value)
+  if (page === 'index') return { url: `${BB}/shares/get-eod-data-count?code=DSEX&upto=${new Date(Date.now() + 2 * 864e5).toISOString().slice(0, 10)}&count=3&col=d:1,c:1,_id:0`, ttl: 120 };
   if (page === 'archive') {
     const d = /^\d{4}-\d{2}-\d{2}$/;
     // "All Instrument" returns every stock and only works in that exact case
